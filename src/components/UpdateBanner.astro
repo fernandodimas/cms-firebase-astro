@@ -1,0 +1,343 @@
+---
+/**
+ * UpdateBanner.astro
+ *
+ * Componente do painel administrativo que:
+ *   1. Injeta a versão atual estaticamente no build (sem JS extra)
+ *   2. Consulta o GitHub API para a versão mais recente do repositório
+ *   3. Exibe um banner apenas se houver atualização disponível
+ *   4. Dispara repository_dispatch com event_type: "update-template"
+ *
+ * REGRA DA SKILL:
+ *   - Zero bibliotecas externas
+ *   - JS mínimo, sem bloqueio de renderização (defer)
+ *   - Lê o PAT de um campo de configuração do próprio painel
+ */
+
+interface Props {
+  /** Versão atual do site, injetada estaticamente durante o build */
+  currentVersion: string;
+  /** Owner do repositório GitHub (ex: "fernandodimas") */
+  repoOwner: string;
+  /** Nome do repositório GitHub (ex: "cms-firebase-astro") */
+  repoName: string;
+}
+
+const { currentVersion, repoOwner, repoName } = Astro.props;
+---
+
+<!-- Banner oculto por padrão — JS o exibe apenas se houver update -->
+<div
+  id="update-banner"
+  class="update-banner"
+  hidden
+  role="alert"
+  aria-live="polite"
+  data-current-version={currentVersion}
+  data-repo-owner={repoOwner}
+  data-repo-name={repoName}
+>
+  <div class="update-banner__content">
+    <span class="update-banner__icon" aria-hidden="true">🔄</span>
+
+    <div class="update-banner__text">
+      <strong class="update-banner__title">Nova versão de template disponível!</strong>
+      <span class="update-banner__subtitle" id="update-versions"></span>
+    </div>
+
+    <div class="update-banner__actions">
+      <!-- Campo de PAT — lido pelo script no momento do clique -->
+      <label for="github-pat" class="update-banner__pat-label">
+        GitHub Token (PAT)
+      </label>
+      <input
+        type="password"
+        id="github-pat"
+        class="update-banner__pat-input"
+        placeholder="ghp_..."
+        autocomplete="off"
+        spellcheck="false"
+      />
+
+      <button
+        id="update-btn"
+        class="update-banner__btn update-banner__btn--primary"
+        type="button"
+      >
+        Aplicar Atualização
+      </button>
+    </div>
+  </div>
+
+  <!-- Feedback do processo -->
+  <p id="update-status" class="update-banner__status" hidden aria-live="assertive"></p>
+</div>
+
+<!-- ================================================================
+  Script de verificação de versão + disparo de deploy
+  Carregado com "defer" — não bloqueia renderização.
+  < 1.5 KB minificado.
+================================================================ -->
+<script defer>
+(function () {
+  'use strict';
+
+  var banner = document.getElementById('update-banner');
+  if (!banner) return;
+
+  var owner       = banner.dataset.repoOwner;
+  var repo        = banner.dataset.repoName;
+  var localVer    = banner.dataset.currentVersion || '0.0.0';
+
+  /**
+   * Compara duas versões semânticas.
+   * Retorna true se remoteVer > localVer (nova versão disponível).
+   *
+   * @param {string} localVer   - Versão local (ex: "1.0.0")
+   * @param {string} remoteVer  - Versão remota (ex: "1.1.0")
+   * @returns {boolean}
+   */
+  function isNewer(localVer, remoteVer) {
+    var local  = localVer.replace(/^v/, '').split('.').map(Number);
+    var remote = remoteVer.replace(/^v/, '').split('.').map(Number);
+    for (var i = 0; i < 3; i++) {
+      var l = local[i] || 0;
+      var r = remote[i] || 0;
+      if (r > l) return true;
+      if (r < l) return false;
+    }
+    return false; // versões iguais
+  }
+
+  /**
+   * Busca o version.json do repositório remoto via GitHub Contents API.
+   * Evita CORS: usa api.github.com (permite chamadas de navegador sem autenticação para repos públicos).
+   * O conteúdo retornado pela API está em Base64 dentro do campo "content".
+   */
+  async function checkVersion() {
+    try {
+      var url = 'https://api.github.com/repos/' + owner + '/' + repo + '/contents/public/version.json';
+      var res = await fetch(url, {
+        headers: {
+          Accept: 'application/vnd.github.v3+json',
+        },
+      });
+
+      if (!res.ok) {
+        console.warn('[UpdateBanner] GitHub API retornou:', res.status);
+        return;
+      }
+
+      var data = await res.json();
+
+      // A API do GitHub retorna o conteúdo em Base64
+      var decoded = atob(data.content.replace(/\n/g, ''));
+      var remote = JSON.parse(decoded);
+      var remoteVer = remote.version || '0.0.0';
+
+      if (isNewer(localVer, remoteVer)) {
+        // Exibir banner
+        var versionsEl = document.getElementById('update-versions');
+        if (versionsEl) {
+          versionsEl.textContent = 'v' + localVer + ' → v' + remoteVer;
+        }
+        banner.hidden = false;
+      }
+    } catch (err) {
+      // Falha silenciosa — não deve impactar o painel
+      console.warn('[UpdateBanner] Falha ao verificar versão:', err);
+    }
+  }
+
+  /**
+   * Dispara o repository_dispatch no GitHub com event_type: "update-template".
+   * Lê o PAT do campo de input no momento do clique.
+   *
+   * @param {string} pat - Personal Access Token (scope: repo)
+   */
+  async function triggerUpdate(pat) {
+    var statusEl = document.getElementById('update-status');
+    var btn      = document.getElementById('update-btn');
+
+    if (!statusEl || !btn) return;
+
+    // Desabilita o botão para evitar duplo clique
+    btn.disabled = true;
+    btn.textContent = 'Enviando…';
+    statusEl.hidden = true;
+
+    try {
+      var url = 'https://api.github.com/repos/' + owner + '/' + repo + '/dispatches';
+
+      var res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: 'token ' + pat,
+          Accept: 'application/vnd.github.everest-preview+json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          event_type: 'update-template',
+          client_payload: {
+            triggered_by: 'admin-panel',
+            timestamp: new Date().toISOString(),
+          },
+        }),
+      });
+
+      if (res.status === 204) {
+        // Sucesso: GitHub retorna 204 No Content
+        statusEl.textContent = '✅ Deploy iniciado! O template será atualizado em ~2 minutos.';
+        statusEl.className   = 'update-banner__status update-banner__status--success';
+        btn.textContent = 'Deploy em andamento…';
+      } else {
+        var body = await res.json().catch(() => ({}));
+        throw new Error(body.message || 'Status ' + res.status);
+      }
+    } catch (err) {
+      statusEl.textContent = '❌ Erro: ' + (err.message || 'Verifique o PAT e tente novamente.');
+      statusEl.className   = 'update-banner__status update-banner__status--error';
+      btn.disabled = false;
+      btn.textContent = 'Aplicar Atualização';
+    }
+
+    statusEl.hidden = false;
+  }
+
+  // ── Listeners ──────────────────────────────────────────────────────
+
+  var btn = document.getElementById('update-btn');
+  btn && btn.addEventListener('click', function () {
+    var pat = (document.getElementById('github-pat')).value.trim();
+
+    if (!pat) {
+      var statusEl = document.getElementById('update-status');
+      if (statusEl) {
+        statusEl.textContent = '⚠️ Informe o GitHub Personal Access Token (PAT) antes de continuar.';
+        statusEl.className   = 'update-banner__status update-banner__status--warn';
+        statusEl.hidden = false;
+      }
+      return;
+    }
+
+    triggerUpdate(pat);
+  });
+
+  // ── Inicialização ──────────────────────────────────────────────────
+  // Aguarda DOM pronto (script é defer, mas garante cobertura total)
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', checkVersion);
+  } else {
+    checkVersion();
+  }
+})();
+</script>
+
+<style>
+  .update-banner {
+    background: linear-gradient(135deg, #1a1a2e 0%, #302b63 100%);
+    color: #fff;
+    border-radius: 12px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 4px 20px rgba(48, 43, 99, 0.3);
+  }
+
+  .update-banner__content {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .update-banner__icon {
+    font-size: 1.75rem;
+    flex-shrink: 0;
+  }
+
+  .update-banner__text {
+    flex: 1;
+    min-width: 160px;
+  }
+
+  .update-banner__title {
+    display: block;
+    font-size: 1rem;
+    font-weight: 700;
+  }
+
+  .update-banner__subtitle {
+    font-size: 0.8rem;
+    opacity: 0.75;
+    font-family: monospace;
+  }
+
+  .update-banner__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem;
+  }
+
+  .update-banner__pat-label {
+    font-size: 0.75rem;
+    opacity: 0.8;
+    white-space: nowrap;
+  }
+
+  .update-banner__pat-input {
+    padding: 0.45rem 0.75rem;
+    border: 1.5px solid rgba(255, 255, 255, 0.3);
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-family: monospace;
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    width: 220px;
+    transition: border-color 0.15s;
+  }
+
+  .update-banner__pat-input::placeholder { opacity: 0.5; }
+  .update-banner__pat-input:focus {
+    outline: none;
+    border-color: rgba(255, 255, 255, 0.7);
+  }
+
+  .update-banner__btn {
+    padding: 0.5rem 1.25rem;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: opacity 0.15s ease, transform 0.1s ease;
+    white-space: nowrap;
+  }
+
+  .update-banner__btn--primary {
+    background: #fff;
+    color: #302b63;
+  }
+
+  .update-banner__btn--primary:hover:not(:disabled) {
+    opacity: 0.9;
+    transform: translateY(-1px);
+  }
+
+  .update-banner__btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .update-banner__status {
+    margin-top: 0.75rem;
+    padding: 0.6rem 1rem;
+    border-radius: 6px;
+    font-size: 0.875rem;
+  }
+
+  .update-banner__status--success { background: rgba(209, 250, 229, 0.15); color: #a7f3d0; }
+  .update-banner__status--error   { background: rgba(254, 226, 226, 0.15); color: #fca5a5; }
+  .update-banner__status--warn    { background: rgba(254, 243, 199, 0.15); color: #fde68a; }
+</style>
