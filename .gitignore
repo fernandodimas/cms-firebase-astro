@@ -1,0 +1,15 @@
+# Dependências
+node_modules/
+
+# Build
+dist/
+.astro/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Firebase
+.firebase/
+firebase-debug.log

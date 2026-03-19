@@ -1,0 +1,118 @@
+---
+/**
+ * Layout base da landing page.
+ *
+ * REGRAS DA SKILL:
+ * - Zero JS enviado ao cliente (exceto dtr.js público, < 1KB)
+ * - JSON-LD Schema.org injetado no <head>
+ * - HTML rigidamente semântico (um único H1 por página)
+ */
+import type { CMSDocument } from '@/types/cms';
+
+interface Props {
+  cms: CMSDocument;
+}
+
+const { cms } = Astro.props;
+const { meta, schemaOrg } = cms;
+
+// Monta o objeto JSON-LD dinamicamente a partir dos dados do CMS
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': schemaOrg.type,
+  name: schemaOrg.name,
+  description: schemaOrg.description,
+  url: schemaOrg.url,
+  ...(schemaOrg.logo && {
+    logo: {
+      '@type': 'ImageObject',
+      url: schemaOrg.logo,
+    },
+  }),
+  ...(schemaOrg.telephone && { telephone: schemaOrg.telephone }),
+  ...(schemaOrg.address && {
+    address: {
+      '@type': 'PostalAddress',
+      streetAddress: schemaOrg.address.street,
+      addressLocality: schemaOrg.address.city,
+      addressRegion: schemaOrg.address.state,
+      postalCode: schemaOrg.address.postalCode,
+      addressCountry: schemaOrg.address.country,
+    },
+  }),
+};
+---
+
+<!doctype html>
+<html lang={meta.lang}>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!-- SEO Primário -->
+    <title>{meta.title}</title>
+    <meta name="description" content={meta.description} />
+    <link rel="canonical" href={meta.siteUrl} />
+    <meta name="author" content={meta.author} />
+
+    <!-- Open Graph / Social -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={meta.siteUrl} />
+    <meta property="og:title" content={meta.title} />
+    <meta property="og:description" content={meta.description} />
+    <meta property="og:image" content={meta.ogImage} />
+    <meta property="og:locale" content={meta.lang.replace('-', '_')} />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={meta.title} />
+    <meta name="twitter:description" content={meta.description} />
+    <meta name="twitter:image" content={meta.ogImage} />
+
+    <!-- Schema.org JSON-LD (GEO — Otimização para Motores Gerativos de IA) -->
+    <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
+
+    <!-- Favicon mínimo -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    <!-- Google Fonts com display=swap para evitar FOIT -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap"
+    />
+
+    <!-- Estilos globais — inline para evitar render-blocking -->
+    <style is:inline>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      html { font-family: 'Inter', system-ui, sans-serif; scroll-behavior: smooth; }
+      body { color: #1a1a2e; background: #ffffff; line-height: 1.6; }
+      img { max-width: 100%; height: auto; display: block; }
+      a { color: inherit; }
+
+      /* Utilitários de container */
+      .container { width: 100%; max-width: 1100px; margin-inline: auto; padding-inline: 1.5rem; }
+      .section { padding-block: 5rem; }
+
+      /* Acessibilidade: skip link */
+      .skip-link { position: absolute; transform: translateY(-100%); background: #000; color: #fff; padding: .5rem 1rem; text-decoration: none; }
+      .skip-link:focus { transform: translateY(0); }
+    </style>
+  </head>
+
+  <body>
+    <a class="skip-link" href="#conteudo-principal">Ir para o conteúdo</a>
+
+    <main id="conteudo-principal">
+      <slot />
+    </main>
+
+    <!--
+      DTR — Dynamic Text Replacement (Fase 4 da skill)
+      Script Vanilla JS ultraleve que lê ?utm_term= e substitui elementos [data-dtr]
+      Carregado de forma assíncrona para não bloquear o LCP
+    -->
+    <script src="/scripts/dtr.js" async defer></script>
+  </body>
+</html>

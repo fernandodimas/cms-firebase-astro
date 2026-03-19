@@ -1,0 +1,102 @@
+name: CMS Deploy — Firebase Hosting
+
+# ============================================================
+# TRIGGER: repository_dispatch enviado pelo painel admin
+#
+# REGRA DA SKILL:
+# "A publicação deve ser orquestrada pelo frontend administrativo:
+#  o painel salva o documento no Firestore e, em seguida, faz uma
+#  requisição HTTPS direta para a API do GitHub acionando um evento
+#  repository_dispatch."
+#
+# Como disparar manualmente (ex: curl):
+#   curl -X POST \
+#     -H "Authorization: token $GITHUB_TOKEN" \
+#     -H "Accept: application/vnd.github.everest-preview+json" \
+#     https://api.github.com/repos/SEU_ORG/SEU_REPO/dispatches \
+#     -d '{"event_type":"cms-deploy","client_payload":{"site_id":"meu-site"}}'
+# ============================================================
+on:
+  repository_dispatch:
+    types:
+      - cms-deploy
+
+  # Permite disparar manualmente pela UI do GitHub também
+  workflow_dispatch:
+    inputs:
+      site_id:
+        description: 'ID do site no Firestore (ex: meu-site)'
+        required: false
+        default: 'default'
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  build-and-deploy:
+    name: Build Astro SSG → Deploy Firebase Hosting
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ------------------------------------------------------------------ #
+      # 1. Checkout do repositório
+      # ------------------------------------------------------------------ #
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------ #
+      # 2. Setup Node.js com cache de dependências
+      # ------------------------------------------------------------------ #
+      - name: ⚙️ Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      # ------------------------------------------------------------------ #
+      # 3. Instalar dependências (npm ci para build determinístico)
+      # ------------------------------------------------------------------ #
+      - name: 📦 Instalar dependências
+        run: npm ci
+
+      # ------------------------------------------------------------------ #
+      # 4. Build Astro (SSG)
+      #    No build time, lib/firestore.ts lê o documento único do Firestore.
+      #    Variáveis de ambiente injetadas via secrets do GitHub.
+      # ------------------------------------------------------------------ #
+      - name: 🏗️ Build Astro SSG
+        run: npm run build
+        env:
+          # Caminho do documento no Firestore (ex: "sites/meu-site")
+          FIRESTORE_DOCUMENT_PATH: sites/${{ github.event.client_payload.site_id || inputs.site_id || 'default' }}
+          # JSON da Service Account do Firebase (base64-decoded pelo utilitário)
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+
+      # ------------------------------------------------------------------ #
+      # 5. Deploy para Firebase Hosting
+      #    Usa o CLI oficial do Firebase (firebase-tools).
+      #    REGRA: sem Cloud Functions (plano gratuito).
+      # ------------------------------------------------------------------ #
+      - name: 🚀 Deploy para Firebase Hosting
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          channelId: live
+          # O projectId será lido do .firebaserc automaticamente
+        env:
+          FIREBASE_CLI_EXPERIMENTS: webframeworks
+
+      # ------------------------------------------------------------------ #
+      # 6. Resumo do deploy no GitHub Actions
+      # ------------------------------------------------------------------ #
+      - name: 📋 Resumo do Deploy
+        if: success()
+        run: |
+          echo "## ✅ Deploy concluído com sucesso!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Trigger:** \`${{ github.event_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Site ID:** \`${{ github.event.client_payload.site_id || 'default' }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Data:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY

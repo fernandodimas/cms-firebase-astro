@@ -1,0 +1,110 @@
+---
+/**
+ * Componente Hero — seção de abertura da landing page.
+ *
+ * REGRAS DA SKILL:
+ * - Único H1 da página (sem JS, zero-JS)
+ * - O headline principal tem [data-dtr="headline"] para o script DTR
+ */
+import type { HeroSection } from '@/types/cms';
+
+interface Props {
+  data: HeroSection;
+}
+
+const { data } = Astro.props;
+---
+
+<section class="hero section" aria-labelledby="hero-heading">
+  <div class="container hero__inner">
+    <div class="hero__content">
+      <!--
+        data-dtr="headline": alvo do script DTR.
+        O JS lê ?utm_term= e substitui o texto deste elemento,
+        melhorando o Índice de Qualidade do Google Ads.
+      -->
+      <h1 id="hero-heading" class="hero__headline" data-dtr="headline">
+        {data.headline}
+      </h1>
+
+      <p class="hero__subheadline">{data.subheadline}</p>
+
+      <a href={data.ctaUrl} class="hero__cta btn btn--primary">
+        {data.ctaText}
+      </a>
+    </div>
+
+    {data.imageUrl && (
+      <div class="hero__media">
+        <img
+          src={data.imageUrl}
+          alt={data.imageAlt ?? ''}
+          width="600"
+          height="400"
+          loading="eager"
+          fetchpriority="high"
+          decoding="async"
+        />
+      </div>
+    )}
+  </div>
+</section>
+
+<style>
+  .hero {
+    background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+    color: #ffffff;
+    padding-block: 6rem;
+  }
+
+  .hero__inner {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 3rem;
+    align-items: center;
+  }
+
+  @media (min-width: 768px) {
+    .hero__inner {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+
+  .hero__headline {
+    font-size: clamp(2rem, 5vw, 3.5rem);
+    font-weight: 700;
+    line-height: 1.15;
+    margin-bottom: 1.25rem;
+  }
+
+  .hero__subheadline {
+    font-size: clamp(1rem, 2.5vw, 1.25rem);
+    opacity: 0.85;
+    margin-bottom: 2rem;
+    max-width: 540px;
+  }
+
+  .btn {
+    display: inline-block;
+    padding: 0.875rem 2rem;
+    border-radius: 8px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  }
+
+  .btn--primary {
+    background: #f5a623;
+    color: #1a1a2e;
+  }
+
+  .hero__media img {
+    border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+  }
+</style>

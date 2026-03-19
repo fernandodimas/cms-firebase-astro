@@ -1,0 +1,25 @@
+---
+/**
+ * Página principal da landing page.
+ *
+ * Busca o documento CMS no build time (1 leitura Firestore)
+ * e monta todos os componentes com os dados recebidos.
+ * Zero JavaScript enviado ao cliente (exceto dtr.js).
+ */
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import Hero from '@/components/Hero.astro';
+import Features from '@/components/Features.astro';
+import About from '@/components/About.astro';
+import Contact from '@/components/Contact.astro';
+import { getCMSDocument } from '@/lib/firestore';
+
+// Build time: busca dados do Firestore (ou sampleData em dev)
+const cms = await getCMSDocument();
+---
+
+<BaseLayout cms={cms}>
+  <Hero data={cms.hero} />
+  <Features data={cms.features} />
+  <About data={cms.about} />
+  <Contact data={cms.contact} />
+</BaseLayout>

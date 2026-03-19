@@ -1,0 +1,76 @@
+---
+/**
+ * Componente About — história e propósito da empresa.
+ * Zero JS. Renderização estática.
+ */
+import type { AboutSection } from '@/types/cms';
+
+interface Props {
+  data: AboutSection;
+}
+
+const { data } = Astro.props;
+---
+
+<section class="about section" aria-labelledby="about-heading">
+  <div class="container about__inner">
+    <div class="about__content">
+      <h2 id="about-heading" class="about__heading">{data.heading}</h2>
+
+      {data.paragraphs.map((paragraph) => (
+        <p class="about__paragraph">{paragraph}</p>
+      ))}
+    </div>
+
+    {data.imageUrl && (
+      <div class="about__media">
+        <img
+          src={data.imageUrl}
+          alt={data.imageAlt ?? ''}
+          width="500"
+          height="380"
+          loading="lazy"
+          decoding="async"
+        />
+      </div>
+    )}
+  </div>
+</section>
+
+<style>
+  .about {
+    background: #ffffff;
+  }
+
+  .about__inner {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 3rem;
+    align-items: center;
+  }
+
+  @media (min-width: 768px) {
+    .about__inner {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+
+  .about__heading {
+    font-size: clamp(1.75rem, 4vw, 2.5rem);
+    font-weight: 700;
+    margin-bottom: 1.5rem;
+    color: #1a1a2e;
+  }
+
+  .about__paragraph {
+    color: #495057;
+    margin-bottom: 1rem;
+    font-size: 1rem;
+    line-height: 1.75;
+  }
+
+  .about__media img {
+    border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.1);
+  }
+</style>
