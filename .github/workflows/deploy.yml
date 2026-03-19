@@ -3,17 +3,17 @@ name: CMS Deploy — Firebase Hosting
 # ============================================================
 # TRIGGERS: repository_dispatch (dois tipos)
 #
-# 1. cms-deploy    → Rebuild e redeploy do site (conteúdo atualizado)
-# 2. update-template → Atualiza o template, incrementa versão e redeploy
+# 1. cms-deploy       → Rebuild e redeploy (conteúdo atualizado)
+# 2. update-template  → Atualiza template, bumpa versão e redeploy
 #
-# Disparar via painel admin ou manualmente (workflow_dispatch).
+# client_payload.bump_type: "patch" | "minor" | "major" (default: patch)
 #
-# Exemplo cURL — update-template:
+# Exemplo cURL — update-template (minor bump):
 #   curl -X POST \
 #     -H "Authorization: token $PAT" \
 #     -H "Accept: application/vnd.github.everest-preview+json" \
 #     https://api.github.com/repos/OWNER/REPO/dispatches \
-#     -d '{"event_type":"update-template"}'
+#     -d '{"event_type":"update-template","client_payload":{"bump_type":"minor"}}'
 # ============================================================
 on:
   repository_dispatch:
@@ -21,7 +21,6 @@ on:
       - cms-deploy
       - update-template
 
-  # Permite disparar manualmente pela UI do GitHub também
   workflow_dispatch:
     inputs:
       site_id:
@@ -32,6 +31,10 @@ on:
         description: 'Tipo de evento (cms-deploy | update-template)'
         required: false
         default: 'cms-deploy'
+      bump_type:
+        description: 'Tipo de bump semântico (patch | minor | major)'
+        required: false
+        default: 'patch'
 
 env:
   NODE_VERSION: '20'
@@ -44,7 +47,7 @@ jobs:
 
     steps:
       # ------------------------------------------------------------------ #
-      # 1. Checkout do repositório (com token para permitir push de volta)
+      # 1. Checkout com token para permitir push de volta
       # ------------------------------------------------------------------ #
       - name: 📥 Checkout
         uses: actions/checkout@v4
@@ -52,8 +55,8 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       # ------------------------------------------------------------------ #
-      # 2. Bump de versão automático (apenas para update-template)
-      #    Incrementa o patch de public/version.json e commita ao repo.
+      # 2. Bump de versão semântico (apenas para update-template)
+      #    Suporta patch / minor / major via client_payload.bump_type
       # ------------------------------------------------------------------ #
       - name: 🔖 Bump de versão do template
         if: github.event.action == 'update-template' || inputs.event_type == 'update-template'
@@ -62,19 +65,30 @@ jobs:
           CURRENT=$(node -p "require('./public/version.json').version")
           echo "Versão atual: $CURRENT"
 
-          # Incrementa patch (ex: 1.0.0 → 1.0.1)
+          # Determina o tipo de bump: client_payload > workflow_dispatch input > padrão "patch"
+          BUMP_TYPE="${{ github.event.client_payload.bump_type || inputs.bump_type || 'patch' }}"
+          echo "Tipo de bump: $BUMP_TYPE"
+
+          # Calcula nova versão
           NEW=$(node -e "
-            const [ma,mi,pa] = '$CURRENT'.split('.').map(Number);
-            console.log(ma + '.' + mi + '.' + (pa + 1));
+            const [ma, mi, pa] = '$CURRENT'.split('.').map(Number);
+            const bump = '$BUMP_TYPE';
+            if (bump === 'major') console.log((ma + 1) + '.0.0');
+            else if (bump === 'minor') console.log(ma + '.' + (mi + 1) + '.0');
+            else console.log(ma + '.' + mi + '.' + (pa + 1));
           ")
           echo "Nova versão: $NEW"
 
-          # Escreve o novo version.json
+          # Escreve version.json atualizado
           node -e "
             const fs = require('fs');
             fs.writeFileSync(
               './public/version.json',
-              JSON.stringify({ version: '$NEW', releasedAt: new Date().toISOString().slice(0,10) }, null, 2) + '\n'
+              JSON.stringify({
+                version: '$NEW',
+                bump_type: '$BUMP_TYPE',
+                releasedAt: new Date().toISOString().slice(0, 10)
+              }, null, 2) + '\n'
             );
           "
 
@@ -82,12 +96,13 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add public/version.json
-          git commit -m "chore: bump template version to $NEW [skip ci]"
+          git commit -m "chore: bump template version to $NEW ($BUMP_TYPE) [skip ci]"
           git push
           echo "VERSION_BUMPED=$NEW" >> $GITHUB_ENV
+          echo "BUMP_TYPE=$BUMP_TYPE" >> $GITHUB_ENV
 
       # ------------------------------------------------------------------ #
-      # 2. Setup Node.js com cache de dependências
+      # 3. Setup Node.js com cache de dependências
       # ------------------------------------------------------------------ #
       - name: ⚙️ Setup Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -96,28 +111,24 @@ jobs:
           cache: 'npm'
 
       # ------------------------------------------------------------------ #
-      # 3. Instalar dependências (npm ci para build determinístico)
+      # 4. Instalar dependências
       # ------------------------------------------------------------------ #
       - name: 📦 Instalar dependências
         run: npm ci
 
       # ------------------------------------------------------------------ #
-      # 4. Build Astro (SSG)
-      #    No build time, lib/firestore.ts lê o documento único do Firestore.
-      #    Variáveis de ambiente injetadas via secrets do GitHub.
+      # 5. Build Astro SSG
       # ------------------------------------------------------------------ #
       - name: 🏗️ Build Astro SSG
         run: npm run build
         env:
-          # Caminho do documento no Firestore (ex: "sites/meu-site")
           FIRESTORE_DOCUMENT_PATH: sites/${{ github.event.client_payload.site_id || inputs.site_id || 'default' }}
-          # JSON da Service Account do Firebase (base64-decoded pelo utilitário)
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          # Senha do painel admin (SHA-256 calculado no build)
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
 
       # ------------------------------------------------------------------ #
-      # 5. Deploy para Firebase Hosting
-      #    Usa o CLI oficial do Firebase (firebase-tools).
-      #    REGRA: sem Cloud Functions (plano gratuito).
+      # 6. Deploy para Firebase Hosting
       # ------------------------------------------------------------------ #
       - name: 🚀 Deploy para Firebase Hosting
         uses: FirebaseExtended/action-hosting-deploy@v0
@@ -125,12 +136,11 @@ jobs:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
           channelId: live
-          # O projectId será lido do .firebaserc automaticamente
         env:
           FIREBASE_CLI_EXPERIMENTS: webframeworks
 
       # ------------------------------------------------------------------ #
-      # 6. Resumo do deploy no GitHub Actions
+      # 7. Resumo do deploy
       # ------------------------------------------------------------------ #
       - name: 📋 Resumo do Deploy
         if: success()
@@ -142,7 +152,7 @@ jobs:
           echo "- **Ação:** $([ "$EVENT" = 'update-template' ] && echo 'Atualização de template' || echo 'Deploy de conteúdo')" >> $GITHUB_STEP_SUMMARY
           echo "- **Site ID:** \`${{ github.event.client_payload.site_id || inputs.site_id || 'default' }}\`" >> $GITHUB_STEP_SUMMARY
           if [ -n "${VERSION_BUMPED}" ]; then
-            echo "- **Nova versão:** \`${VERSION_BUMPED}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Nova versão:** \`${VERSION_BUMPED}\` (bump: \`${BUMP_TYPE}\`)" >> $GITHUB_STEP_SUMMARY
           fi
           echo "- **Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Data:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY

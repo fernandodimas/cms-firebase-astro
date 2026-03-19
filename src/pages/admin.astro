@@ -2,98 +2,262 @@
 /**
  * /admin — Painel Administrativo do CMS
  *
- * Página ESTÁTICA (Astro SSG) que injeta a versão atual estaticamente
- * no build e inclui o UpdateBanner para verificação e atualização
- * de templates via GitHub Actions.
+ * PROTEÇÃO: password-gate via localStorage.
+ *   - Senha configurada em ADMIN_PASSWORD (variável de ambiente no build)
+ *     ou fallback para um hash SHA-256 codificado estaticamente.
+ *   - O hash da senha é injetado no HTML em build-time; nunca a senha em texto puro.
+ *   - O gate client-side bloqueia a visualização até a senha correta ser digitada.
  *
- * ACESSO: esta URL (ex: seusite.com/admin) deve ser protegida por senha
- * ou acesso restrito no Firebase Hosting.
- *
- * REGRA DA SKILL: zero bibliotecas externas, sem SSR.
+ * REGRA DA SKILL: zero bibliotecas externas, sem SSR, Vanilla JS.
  */
 
 import AdminLayout from '../layouts/AdminLayout.astro';
 import UpdateBanner from '../components/UpdateBanner.astro';
 
-// Lê o version.json gerado estaticamente durante o build
-// O arquivo está em public/ e será copiado para dist/
 import pkg from '../../public/version.json';
 const { version: currentVersion } = pkg;
 
-// Configuração do repositório GitHub (substitua pelos seus dados reais)
 const REPO_OWNER = 'fernandodimas';
 const REPO_NAME  = 'cms-firebase-astro';
+
+/**
+ * Gera o SHA-256 hex da senha em build-time (Node.js).
+ * Se ADMIN_PASSWORD não estiver definida, usa o hash de "admin123".
+ * Substitua por uma senha forte antes de publicar.
+ */
+import crypto from 'node:crypto';
+const rawPassword   = import.meta.env.ADMIN_PASSWORD ?? 'admin123';
+const passwordHash  = crypto.createHash('sha256').update(rawPassword).digest('hex');
 ---
 
+<!-- ========================================================
+     Password Gate — visível antes da autenticação
+     ======================================================== -->
+<div id="admin-gate" class="gate">
+  <div class="gate__box" role="main">
+    <span class="gate__icon" aria-hidden="true">🔐</span>
+    <h1 class="gate__title">Acesso Restrito</h1>
+    <p class="gate__subtitle">Painel CMS — Informe a senha de administrador</p>
+
+    <form id="gate-form" class="gate__form" autocomplete="off" novalidate>
+      <label for="gate-password" class="sr-only">Senha</label>
+      <input
+        type="password"
+        id="gate-password"
+        class="gate__input"
+        placeholder="Senha"
+        autofocus
+        spellcheck="false"
+      />
+      <button type="submit" class="gate__btn">Entrar</button>
+    </form>
+
+    <p id="gate-error" class="gate__error" hidden role="alert">
+      ❌ Senha inválida. Tente novamente.
+    </p>
+  </div>
+</div>
+
+<!-- Script do password-gate — inline, muito pequeno, não bloqueia LCP -->
+<script define:vars={{ passwordHash }}>
+(function () {
+  var SESSION_KEY = 'cms_admin_session';
+  var gate = document.getElementById('admin-gate');
+  var panel = document.getElementById('admin-panel');
+
+  function sha256(str) {
+    // SubtleCrypto (Web Crypto API) — suporte universal em browsers modernos
+    var enc = new TextEncoder();
+    return crypto.subtle.digest('SHA-256', enc.encode(str)).then(function (buf) {
+      return Array.from(new Uint8Array(buf)).map(function (b) {
+        return b.toString(16).padStart(2, '0');
+      }).join('');
+    });
+  }
+
+  function unlock() {
+    if (gate)  gate.hidden  = true;
+    if (panel) panel.hidden = false;
+  }
+
+  function lock() {
+    if (gate)  gate.hidden  = false;
+    if (panel) panel.hidden = true;
+  }
+
+  // Sessão persistente por 8 horas
+  var saved = sessionStorage.getItem(SESSION_KEY);
+  if (saved === passwordHash) { unlock(); return; }
+
+  lock();
+
+  var form  = document.getElementById('gate-form');
+  var input = document.getElementById('gate-password');
+  var error = document.getElementById('gate-error');
+
+  form && form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var pw = input ? input.value : '';
+    sha256(pw).then(function (hash) {
+      if (hash === passwordHash) {
+        sessionStorage.setItem(SESSION_KEY, hash);
+        unlock();
+      } else {
+        if (error) error.hidden = false;
+        if (input) { input.value = ''; input.focus(); }
+      }
+    });
+  });
+})();
+</script>
+
+<!-- ========================================================
+     Painel Admin — oculto até autenticação
+     ======================================================== -->
 <AdminLayout
   title="Painel Admin — CMS"
   description="Painel administrativo do CMS Firebase + Astro."
 >
-  <main class="admin-layout">
-    <!-- Cabeçalho do painel -->
-    <header class="admin-header">
-      <div class="admin-header__brand">
-        <span class="admin-header__logo" aria-hidden="true">⚙️</span>
-        <div>
-          <h1 class="admin-header__title">Painel CMS</h1>
-          <p class="admin-header__version">
-            Template <code>v{currentVersion}</code>
+  <div id="admin-panel" hidden>
+    <main class="admin-layout">
+      <header class="admin-header">
+        <div class="admin-header__brand">
+          <span class="admin-header__logo" aria-hidden="true">⚙️</span>
+          <div>
+            <h1 class="admin-header__title">Painel CMS</h1>
+            <p class="admin-header__version">
+              Template <code>v{currentVersion}</code>
+            </p>
+          </div>
+          <button id="logout-btn" class="admin-btn admin-btn--ghost admin-header__logout" type="button">
+            Sair 🔒
+          </button>
+        </div>
+      </header>
+
+      <div class="admin-body">
+        <UpdateBanner
+          currentVersion={currentVersion}
+          repoOwner={REPO_OWNER}
+          repoName={REPO_NAME}
+        />
+
+        <section class="admin-card">
+          <h2 class="admin-card__title">📄 Conteúdo do Site</h2>
+          <p class="admin-card__description">
+            Edite o documento no Firestore para atualizar o conteúdo do site.
+            Após salvar, clique em "Publicar" para disparar um novo build.
           </p>
-        </div>
+          <div class="admin-card__actions">
+            <a
+              href="https://console.firebase.google.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="admin-btn admin-btn--secondary"
+            >
+              Abrir Firestore Console →
+            </a>
+          </div>
+        </section>
+
+        <section class="admin-card">
+          <h2 class="admin-card__title">📊 Status do Deploy</h2>
+          <p class="admin-card__description">
+            Monitore os deploys em andamento no repositório GitHub.
+          </p>
+          <div class="admin-card__actions">
+            <a
+              href={`https://github.com/${REPO_OWNER}/${REPO_NAME}/actions`}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="admin-btn admin-btn--secondary"
+            >
+              Ver GitHub Actions →
+            </a>
+          </div>
+        </section>
       </div>
-    </header>
-
-    <div class="admin-body">
-      <!--
-        UpdateBanner — exibido apenas se houver nova versão disponível.
-        A verificação acontece no cliente via GitHub API (sem CORS).
-      -->
-      <UpdateBanner
-        currentVersion={currentVersion}
-        repoOwner={REPO_OWNER}
-        repoName={REPO_NAME}
-      />
-
-      <!-- Seções do painel (expandir conforme necessário) -->
-      <section class="admin-card">
-        <h2 class="admin-card__title">📄 Conteúdo do Site</h2>
-        <p class="admin-card__description">
-          Edite o documento no Firestore para atualizar o conteúdo do site.
-          Após salvar, clique em "Publicar" para disparar um novo build.
-        </p>
-        <div class="admin-card__actions">
-          <a
-            href="https://console.firebase.google.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="admin-btn admin-btn--secondary"
-          >
-            Abrir Firestore Console →
-          </a>
-        </div>
-      </section>
-
-      <section class="admin-card">
-        <h2 class="admin-card__title">📊 Status do Deploy</h2>
-        <p class="admin-card__description">
-          Monitore os deploys em andamento no repositório GitHub.
-        </p>
-        <div class="admin-card__actions">
-          <a
-            href={`https://github.com/${REPO_OWNER}/${REPO_NAME}/actions`}
-            target="_blank"
-            rel="noopener noreferrer"
-            class="admin-btn admin-btn--secondary"
-          >
-            Ver GitHub Actions →
-          </a>
-        </div>
-      </section>
-    </div>
-  </main>
+    </main>
+  </div>
 </AdminLayout>
 
+<!-- Logout -->
+<script>
+document.getElementById('logout-btn')?.addEventListener('click', function () {
+  sessionStorage.clear();
+  location.reload();
+});
+</script>
+
 <style>
+  /* ── Gate ────────────────────────────────────────────────── */
+  .gate {
+    min-height: 100vh;
+    background: #0f0f14;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: system-ui, sans-serif;
+  }
+
+  .gate__box {
+    background: #1a1a2e;
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 16px;
+    padding: 2.5rem 2rem;
+    text-align: center;
+    width: 100%;
+    max-width: 360px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    color: #e2e8f0;
+  }
+
+  .gate__icon { font-size: 2.5rem; display: block; margin-bottom: 1rem; }
+  .gate__title { font-size: 1.4rem; font-weight: 700; margin: 0 0 0.25rem; }
+  .gate__subtitle { font-size: 0.8rem; opacity: 0.5; margin: 0 0 1.5rem; }
+
+  .gate__form { display: flex; gap: 0.5rem; }
+
+  .gate__input {
+    flex: 1;
+    padding: 0.6rem 0.9rem;
+    border: 1.5px solid rgba(255,255,255,0.2);
+    border-radius: 8px;
+    background: rgba(255,255,255,0.06);
+    color: #fff;
+    font-size: 0.9rem;
+    font-family: inherit;
+    transition: border-color 0.15s;
+  }
+  .gate__input:focus { outline: none; border-color: rgba(255,255,255,0.5); }
+
+  .gate__btn {
+    padding: 0.6rem 1.2rem;
+    background: #7c3aed;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .gate__btn:hover { opacity: 0.85; }
+
+  .gate__error {
+    margin: 0.75rem 0 0;
+    font-size: 0.8rem;
+    color: #fca5a5;
+  }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+  }
+
+  /* ── Admin Layout ────────────────────────────────────────── */
   .admin-layout {
     min-height: 100vh;
     background: #0f0f14;
@@ -101,10 +265,9 @@ const REPO_NAME  = 'cms-firebase-astro';
     font-family: system-ui, sans-serif;
   }
 
-  /* ── Header ─────────────────────────────────────── */
   .admin-header {
     background: #1a1a2e;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
     padding: 1.25rem 2rem;
   }
 
@@ -117,28 +280,16 @@ const REPO_NAME  = 'cms-firebase-astro';
   }
 
   .admin-header__logo { font-size: 1.75rem; }
-
-  .admin-header__title {
-    font-size: 1.25rem;
-    font-weight: 700;
-    margin: 0;
-    line-height: 1;
-  }
-
-  .admin-header__version {
-    font-size: 0.75rem;
-    opacity: 0.5;
-    margin: 0.2rem 0 0;
-  }
-
+  .admin-header__title { font-size: 1.25rem; font-weight: 700; margin: 0; line-height: 1; }
+  .admin-header__version { font-size: 0.75rem; opacity: 0.5; margin: 0.2rem 0 0; }
   .admin-header__version code {
     font-family: monospace;
     background: rgba(255,255,255,0.06);
     padding: 0.1em 0.4em;
     border-radius: 4px;
   }
+  .admin-header__logout { margin-left: auto; }
 
-  /* ── Body ────────────────────────────────────────── */
   .admin-body {
     max-width: 900px;
     margin: 0 auto;
@@ -148,30 +299,17 @@ const REPO_NAME  = 'cms-firebase-astro';
     gap: 1.5rem;
   }
 
-  /* ── Cards ───────────────────────────────────────── */
   .admin-card {
     background: #1a1a2e;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255,255,255,0.08);
     border-radius: 12px;
     padding: 1.5rem;
   }
 
-  .admin-card__title {
-    font-size: 1rem;
-    font-weight: 700;
-    margin: 0 0 0.5rem;
-  }
-
-  .admin-card__description {
-    font-size: 0.875rem;
-    opacity: 0.65;
-    margin: 0 0 1.25rem;
-    line-height: 1.55;
-  }
-
+  .admin-card__title { font-size: 1rem; font-weight: 700; margin: 0 0 0.5rem; }
+  .admin-card__description { font-size: 0.875rem; opacity: 0.65; margin: 0 0 1.25rem; line-height: 1.55; }
   .admin-card__actions { display: flex; gap: 0.75rem; flex-wrap: wrap; }
 
-  /* ── Botões ─────────────────────────────────────── */
   .admin-btn {
     display: inline-flex;
     align-items: center;
@@ -187,10 +325,18 @@ const REPO_NAME  = 'cms-firebase-astro';
   }
 
   .admin-btn--secondary {
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(255,255,255,0.08);
     color: #e2e8f0;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255,255,255,0.12);
   }
-
   .admin-btn--secondary:hover { opacity: 0.75; }
+
+  .admin-btn--ghost {
+    background: transparent;
+    color: rgba(255,255,255,0.5);
+    border: 1px solid rgba(255,255,255,0.15);
+    font-size: 0.8rem;
+    padding: 0.35rem 0.75rem;
+  }
+  .admin-btn--ghost:hover { color: #fff; border-color: rgba(255,255,255,0.4); }
 </style>
